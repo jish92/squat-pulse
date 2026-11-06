@@ -31,8 +31,8 @@ let mixer=null,action=null,bodyMeshes=[];
 const SPR={
   // Tuned so |acc|~20 at 1rep/s yields ~0.10 breast / ~0.05 glute morph (clearly visible)
   // drive ≈ desired_amp * (2πf)² / typical_acc
-  b:{freq:3.0, damp:0.26, drive:2.4, sag:0.05, upScale:0.55, downScale:1.55, max:0.22},
-  g:{freq:2.4, damp:0.30, drive:1.05, sag:0.022, upScale:0.55, downScale:1.45, max:0.14},
+  b:{freq:2.8, damp:0.24, drive:8.5, sag:0.35, upScale:0.45, downScale:1.15, max:1.05},
+  g:{freq:2.3, damp:0.28, drive:4.2, sag:0.22, upScale:0.50, downScale:1.20, max:0.95},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
 const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);W.sp.springs={breast,glute};
@@ -70,28 +70,59 @@ function driverAcc(){
   return 2*Math.PI*Math.PI*Math.cos(2*Math.PI*phi)*(spd*spd);
 }
 
-function applyBounce(){
+function overlayBounce(){
   const bb=breast.x, gg=glute.x;
   W.sp.bounce.b=bb; W.sp.bounce.g=gg;
   for(const m of bodyMeshes){
     const d=m.morphTargetDictionary||{};
+    const g=m.geometry;
+    if(!g||!g.attributes||!g.attributes.position) continue;
     const inf=m.morphTargetInfluences;
-    if(!inf) continue;
-    if(d.bounce_breast!=null) inf[d.bounce_breast]=bb;
-    if(d.bounce_glute!=null) inf[d.bounce_glute]=gg;
+    // to_half stays on GPU morph; bounce applied on CPU so it is always visible
+    if(inf){
+      if(d.bounce_breast!=null) inf[d.bounce_breast]=0;
+      if(d.bounce_glute!=null) inf[d.bounce_glute]=0;
+    }
+    if(!m.userData._basePos){
+      m.userData._basePos=Float32Array.from(g.attributes.position.array);
+      const morphs=g.morphAttributes&&g.morphAttributes.position;
+      const decode=attr=>{
+        if(!attr) return null;
+        const n=attr.count, out=new Float32Array(n*3);
+        for(let i=0;i<n;i++){ out[i*3]=attr.getX(i); out[i*3+1]=attr.getY(i); out[i*3+2]=attr.getZ(i); }
+        return out;
+      };
+      m.userData._morphBB=decode(morphs&&d.bounce_breast!=null?morphs[d.bounce_breast]:null);
+      m.userData._morphBG=decode(morphs&&d.bounce_glute!=null?morphs[d.bounce_glute]:null);
+    }
+    const base=m.userData._basePos, mb=m.userData._morphBB, mg=m.userData._morphBG;
+    const arr=g.attributes.position.array;
+    const n=base.length;
+    for(let i=0;i<n;i++){
+      let v=base[i];
+      if(mb) v+=mb[i]*bb;
+      if(mg) v+=mg[i]*gg;
+      arr[i]=v;
+    }
+    g.attributes.position.needsUpdate=true;
   }
 }
-W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;if(freeze)W.sp.freezeBounce=true;applyBounce()};W.sp.clearFreeze=()=>{W.sp.freezeBounce=false};
+function applyBounce(){ overlayBounce(); }
+W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;if(freeze)W.sp.freezeBounce=true;applyBounce()};
+W.sp.clearFreeze=()=>{W.sp.freezeBounce=false};
+W.sp.readInfluences=()=>bodyMeshes.map(m=>({name:m.name, dict:m.morphTargetDictionary, inf:[...m.morphTargetInfluences]}));
 
 const L=new GLTFLoader();L.setMeshoptDecoder(MeshoptDecoder);
 L.load('female_squat_pulse_v4.glb',gl=>{
   gl.scene.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{if(!m)return;if(/hair|eyebrow|eyelash|high-poly/i.test(m.name||o.name||'')){m.alphaTest=0.5;m.side=THREE.DoubleSide}else{m.alphaTest=0;m.transparent=false;m.opacity=1;m.depthWrite=true}if(/Bikini/i.test(m.name||o.name||'')){m.side=THREE.DoubleSide;m.roughness=0.55;m.transparent=false;m.opacity=1;m.depthWrite=true}m.needsUpdate=true});
-    if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
-      bodyMeshes.push(o);
+    if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary || 'to_half' in o.morphTargetDictionary)){
+      const mats=Array.isArray(o.material)?o.material:[o.material];
+      mats.forEach(m=>{ if(!m)return; m.morphTargets=true; m.morphNormals=true; m.needsUpdate=true; });
+      if('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary) bodyMeshes.push(o);
     }
   }});
   const b=new THREE.Box3().setFromObject(gl.scene);gl.scene.position.y-=b.min.y;S.add(gl.scene);
-  let n=0;gl.scene.traverse(o=>{if(o.isMesh&&o.visible)n++});W.sp.meshes=n;W.sp.bodyBounceMeshes=bodyMeshes.length;
+  let n=0;gl.scene.traverse(o=>{if(o.isMesh&&o.visible)n++});W.sp.meshes=n;W.sp.bodyBounceMeshes=bodyMeshes.length;W.sp.bodyMeshes=bodyMeshes;
   if(gl.animations&&gl.animations.length){
     mixer=new THREE.AnimationMixer(gl.scene);
     action=mixer.clipAction(gl.animations[0]);
