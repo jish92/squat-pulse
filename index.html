@@ -19,9 +19,6 @@ import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
-import {Line2} from 'three/addons/lines/Line2.js';
-import {LineMaterial} from 'three/addons/lines/LineMaterial.js';
-import {LineGeometry} from 'three/addons/lines/LineGeometry.js';
 
 const R=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
 R.setPixelRatio(Math.min(devicePixelRatio,2));R.setSize(innerWidth,innerHeight);
@@ -43,22 +40,9 @@ ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;S.add(ground);
 const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,freezeBounce:false,errs:[],bounce:{b:0,g:0,acc:0}};
 let mixer=null,action=null,bodyMeshes=[];
 let bikiniMesh=null, modelRoot=null;
-let strapTubes={L:null,R:null}, strapMat=null;
-const STRAP_RADIUS=0.0085;
-
-const STRAP_REST={
-  R:{cup:[0.0601,0.8786,0.1201], clav:[0.0561,0.9163,0.1315], neck:[0.0509,0.9402,0.0908]},
-  L:{cup:[-0.0601,0.8786,0.1201], clav:[-0.0561,0.9162,0.1315], neck:[-0.0509,0.9402,0.0908]},
-};
-
-const STRAP_ANCHORS={
-  // Rest-space vert indices on Bikini (from source GLB)
-  R:{cup:12879, clav:12957, neck:13056},
-  L:{cup:13414, clav:13492, neck:13593},
-};
 
 // Morph travel ~14cm; spring snappier so bounce still reads clearly
-const BUILD='20261106u';
+const BUILD='20261106ae';
 const CHEST_H=0.40;
 const SPR={
   b:{freq:2.9, damp:0.15, drive:40.0, sag:0.28, upScale:0.80, downScale:1.05, max:1.00},
@@ -101,6 +85,70 @@ function pulseHalf(){
   const phi=((action.time/dur)%1+1)%1;
   return 0.5-0.5*Math.cos(2*Math.PI*phi);
 }
+
+
+
+let runtimeBandeau=null;
+const BANDEAU_TRAVEL=0.140;
+function ensureRuntimeBandeau(parent, fromMat){
+  if(runtimeBandeau) return runtimeBandeau;
+  // Elliptical tube top hugging torso (rx sides, rz front/back) — sits on breasts
+  const Y0=0.842, Y1=0.902, nY=8, nTh=36;
+  const CX=0, CZ=0.072;
+  const pos=[], nrm=[], idx=[];
+  for(let iy=0; iy<nY; iy++){
+    const t=iy/(nY-1), y=Y0+(Y1-Y0)*t;
+    // modest coverage bulge mid-band
+    const rx=0.112 + 0.008*Math.sin(Math.PI*t);
+    const rzF=0.086 + 0.010*Math.sin(Math.PI*t); // front clears breast apex ~0.158
+    const rzB=0.068;
+    for(let it=0; it<nTh; it++){
+      const th=it/nTh*Math.PI*2;
+      const c=Math.cos(th), s=Math.sin(th);
+      const rz=s>=0 ? rzF : rzB;
+      const px=CX+rx*c, pz=CZ+rz*s;
+      pos.push(px, y, pz);
+      const nx=c/rx, nz=s/rz, nl=Math.hypot(nx,nz)||1;
+      nrm.push(nx/nl, 0, nz/nl);
+    }
+  }
+  for(let iy=0; iy<nY-1; iy++){
+    for(let it=0; it<nTh; it++){
+      const i0=iy*nTh+it, i1=iy*nTh+((it+1)%nTh);
+      const i2=(iy+1)*nTh+it, i3=(iy+1)*nTh+((it+1)%nTh);
+      idx.push(i0,i2,i1, i1,i2,i3);
+    }
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm,3));
+  geo.setIndex(idx);
+  const mat=(fromMat?fromMat.clone():new THREE.MeshStandardMaterial());
+  mat.color.setRGB(0.62,0.025,0.05);
+  mat.side=THREE.DoubleSide;
+  mat.roughness=0.55; mat.metalness=0.0;
+  mat.transparent=false; mat.opacity=1;
+  mat.depthTest=true; mat.depthWrite=true;
+  mat.polygonOffset=true; mat.polygonOffsetFactor=-3; mat.polygonOffsetUnits=-3;
+  mat.needsUpdate=true;
+  runtimeBandeau=new THREE.Mesh(geo, mat);
+  runtimeBandeau.name='RuntimeBandeau';
+  runtimeBandeau.frustumCulled=false;
+  runtimeBandeau.renderOrder=2;
+  runtimeBandeau.position.set(0,0,0);
+  parent.add(runtimeBandeau);
+  return runtimeBandeau;
+}
+function updateRuntimeBandeau(bb){
+  if(!runtimeBandeau) return;
+  // Ride with breast bounce; clamp rise so it never climbs into neck
+  const k=Math.max(-0.20, Math.min(1.15, bb));
+  runtimeBandeau.position.y = -BANDEAU_TRAVEL * k * 0.95;
+  runtimeBandeau.position.z = 0.012 * Math.max(0, k);
+}
+
+
+
 function applyBounce(){
   const bb=Math.max(-0.55,Math.min(1.20,breast.x)), gg=Math.max(-0.45,Math.min(1.35,glute.x)), th=pulseHalf();
   W.sp.bounce.b=bb; W.sp.bounce.g=gg; W.sp.bounce.th=th;
@@ -111,87 +159,16 @@ function applyBounce(){
     if(/hair|eyebrow|eyelash|teeth|tongue|high-poly|eye|neck|head/i.test(m.name||'')) continue;
     const isBody=/^base$/i.test(m.name)||/^body$/i.test(m.name);
     const isBikini=/bikini/i.test(m.name||'');
-    if(!isBody && !isBikini) continue;
+    const isBandeau=/bandeau/i.test(m.name||'');
+    if(!isBody && !isBikini && !isBandeau) continue;
     if(d.to_half!=null) inf[d.to_half]=th;
     if(d.bounce_breast!=null) inf[d.bounce_breast]=isBody?bb*0.95:bb;
     if(d.bounce_glute!=null) inf[d.bounce_glute]=isBody?gg*0.95:gg;
   }
+  updateRuntimeBandeau(bb);
 }
 W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;if(freeze)W.sp.freezeBounce=true;applyBounce()};
 W.sp.clearFreeze=()=>{W.sp.freezeBounce=false};
-
-function morphedLocal(mesh, vi){
-  const pos=mesh.geometry.attributes.position;
-  let x=pos.getX(vi), y=pos.getY(vi), z=pos.getZ(vi);
-  const morphs=mesh.geometry.morphAttributes?.position;
-  const infl=mesh.morphTargetInfluences;
-  if(morphs&&infl){
-    for(let t=0;t<morphs.length;t++){
-      const w=infl[t]; if(!w) continue;
-      x+=w*morphs[t].getX(vi); y+=w*morphs[t].getY(vi); z+=w*morphs[t].getZ(vi);
-    }
-  }
-  return new THREE.Vector3(x,y,z);
-}
-function morphedWorld(mesh, vi){
-  return mesh.localToWorld(morphedLocal(mesh, vi));
-}
-
-function ensureStrapMat(){
-  if(strapMat) return strapMat;
-  strapMat=new LineMaterial({
-    color:0xc4182a,
-    linewidth:6, // screen pixels — solid continuous on phone/SwiftShader
-    worldUnits:false,
-    dashed:false,
-  });
-  strapMat.depthTest=false;
-  strapMat.depthWrite=false;
-  strapMat.resolution.set(innerWidth, innerHeight);
-  return strapMat;
-}
-
-function rebuildStrapTube(side){
-  if(!bikiniMesh) return;
-  const a=STRAP_ANCHORS[side];
-  const rest=STRAP_REST[side];
-  let cup;
-  try { cup=morphedWorld(bikiniMesh, a.cup); }
-  catch(e){ cup=bikiniMesh.localToWorld(new THREE.Vector3(...rest.cup)); }
-  const neck=bikiniMesh.localToWorld(new THREE.Vector3(...rest.neck));
-  const clavGuide=bikiniMesh.localToWorld(new THREE.Vector3(...rest.clav));
-  // Keep path in front of body
-  cup.z += 0.014; neck.z += 0.010;
-  const clav=new THREE.Vector3().lerpVectors(cup, neck, 0.38);
-  clav.x = cup.x*0.50 + clavGuide.x*0.50;
-  clav.z = Math.max(cup.z, clavGuide.z, neck.z) + 0.050;
-  clav.y = cup.y*0.28 + neck.y*0.72;
-  const mid=new THREE.Vector3().lerpVectors(cup, clav, 0.48);
-  mid.z = Math.max(mid.z, cup.z) + 0.030;
-  const curve=new THREE.CatmullRomCurve3([cup, mid, clav, neck]);
-  const pts=curve.getPoints(48);
-  const positions=[];
-  for(const p of pts) positions.push(p.x,p.y,p.z);
-  const geo=new LineGeometry();
-  geo.setPositions(positions);
-  const key=side;
-  const parent=S;
-  if(strapTubes[key]){ parent.remove(strapTubes[key]); strapTubes[key].geometry.dispose(); }
-  const mesh=new Line2(geo, ensureStrapMat());
-  mesh.computeLineDistances();
-  mesh.frustumCulled=false;
-  mesh.renderOrder=3;
-  mesh.name='StrapTube_'+side;
-  parent.add(mesh);
-  strapTubes[key]=mesh;
-}
-
-function updateStrapTubes(){
-  if(!bikiniMesh) return;
-  bikiniMesh.updateMatrixWorld(true);
-  rebuildStrapTube('R');
-  rebuildStrapTube('L');
-}
 
 const L=new GLTFLoader();
 L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
@@ -208,7 +185,7 @@ L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
       } else {
         m.alphaTest=0; m.transparent=false; m.opacity=1; m.depthWrite=true;
       }
-      if(/Bikini/i.test(m.name||o.name||'')){
+      if(/Bikini|Bandeau/i.test(m.name||o.name||'')){
         m.side=THREE.DoubleSide; m.roughness=0.55; m.transparent=false; m.opacity=1; m.depthWrite=true;
       }
       if(o.morphTargetInfluences&&o.morphTargetInfluences.length){
@@ -224,6 +201,7 @@ L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
       if(o.geometry) o.geometry.morphTargetsRelative=true;
     }
     const isHairFace=/hair|eyebrow|eyelash|teeth|tongue|high-poly|eye/i.test(o.name||'');
+    if(/^bandeau$/i.test(o.name||'')){ o.visible=false; return; }
     if(!isHairFace && o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
       bodyMeshes.push(o);
     }
@@ -232,7 +210,9 @@ L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
   const box=new THREE.Box3().setFromObject(gl.scene);
   gl.scene.position.y-=box.min.y;
   S.add(gl.scene);
-  if(bikiniMesh) ensureStrapMat();
+  const bikMat=(bikiniMesh&&bikiniMesh.material)?(Array.isArray(bikiniMesh.material)?bikiniMesh.material[0]:bikiniMesh.material):null;
+  ensureRuntimeBandeau(gl.scene, bikMat);
+  updateRuntimeBandeau(W.sp.bounce.b||0);
   let n=0; gl.scene.traverse(o=>{if(o.isMesh&&o.visible)n++});
   W.sp.meshes=n; W.sp.bodyBounceMeshes=bodyMeshes.length; W.sp.bodyMeshes=bodyMeshes;
   W.sp.bikiniMesh=bikiniMesh;
@@ -242,10 +222,10 @@ L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
     action.loop=THREE.LoopRepeat; action.clampWhenFinished=false;
     action.timeScale=W.sp.speed; action.play();
     W.sp.duration=gl.animations[0].duration;
-    W.sp.seek=t=>{action.time=((t%1)+1)%1*W.sp.duration;mixer.update(0);applyBounce();updateStrapTubes()};
+    W.sp.seek=t=>{action.time=((t%1)+1)%1*W.sp.duration;mixer.update(0);applyBounce()};
   }
   if(bodyMeshes[0]) W.sp.morphDict=Object.assign({}, bodyMeshes[0].morphTargetDictionary);
-  applyBounce(); updateStrapTubes();
+  applyBounce();
   W.sp.ready=true; document.getElementById('msg').textContent='';
 },undefined,e=>{W.sp.errs.push(String(e)); document.getElementById('msg').textContent='Load failed'});
 
@@ -255,7 +235,7 @@ spd.oninput=()=>{W.sp.speed=+spd.value; document.getElementById('spdv').textCont
 document.getElementById('bb').oninput=e=>{W.sp.breastStr=+e.target.value; document.getElementById('bbv').textContent=(+e.target.value).toFixed(2)};
 document.getElementById('bg').oninput=e=>{W.sp.gluteStr=+e.target.value; document.getElementById('bgv').textContent=(+e.target.value).toFixed(2)};
 document.getElementById('rs').onclick=home;
-addEventListener('resize',()=>{C.aspect=innerWidth/innerHeight; C.updateProjectionMatrix(); R.setSize(innerWidth,innerHeight); if(strapMat) strapMat.resolution.set(innerWidth,innerHeight);});
+addEventListener('resize',()=>{C.aspect=innerWidth/innerHeight; C.updateProjectionMatrix(); R.setSize(innerWidth,innerHeight);});
 
 const clock=new THREE.Clock();
 R.setAnimationLoop(()=>{
@@ -273,7 +253,6 @@ R.setAnimationLoop(()=>{
     stepSpring(glute, 0, W.sp.gluteStr, dt);
   }
   applyBounce();
-  updateStrapTubes();
   const _m=bodyMeshes[0];
   const _inf=_m&&_m.morphTargetDictionary&&_m.morphTargetDictionary.bounce_breast!=null?_m.morphTargetInfluences[_m.morphTargetDictionary.bounce_breast]:0;
   const _log=W.sp.inflLog; _log.push({t:performance.now(),b:W.sp.bounce.b,g:W.sp.bounce.g,acc:W.sp.bounce.acc,infB:_inf});
