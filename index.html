@@ -19,6 +19,9 @@ import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+import {Line2} from 'three/addons/lines/Line2.js';
+import {LineMaterial} from 'three/addons/lines/LineMaterial.js';
+import {LineGeometry} from 'three/addons/lines/LineGeometry.js';
 
 const R=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
 R.setPixelRatio(Math.min(devicePixelRatio,2));R.setSize(innerWidth,innerHeight);
@@ -39,26 +42,39 @@ ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;S.add(ground);
 
 const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,freezeBounce:false,errs:[],bounce:{b:0,g:0,acc:0}};
 let mixer=null,action=null,bodyMeshes=[];
+let bikiniMesh=null, modelRoot=null;
+let strapTubes={L:null,R:null}, strapMat=null;
+const STRAP_RADIUS=0.0085;
 
-// Jog-v6g-style vertical spring: lag/overshoot, damp, sag lower than rise.
-// Morph deltas are mainly -Y (down). Positive influence = breasts drop.
-const BUILD='20261106k';
-const CHEST_H=0.40; // meters of vertical chest travel in to_half (no skeleton in GLB)
+const STRAP_REST={
+  R:{cup:[0.0601,0.8786,0.1201], clav:[0.0561,0.9163,0.1315], neck:[0.0509,0.9402,0.0908]},
+  L:{cup:[-0.0601,0.8786,0.1201], clav:[-0.0561,0.9162,0.1315], neck:[-0.0509,0.9402,0.0908]},
+};
+
+const STRAP_ANCHORS={
+  // Rest-space vert indices on Bikini (from source GLB)
+  R:{cup:12879, clav:12957, neck:13056},
+  L:{cup:13414, clav:13492, neck:13593},
+};
+
+// Morph travel ~14cm; spring snappier so bounce still reads clearly
+const BUILD='20261106s';
+const CHEST_H=0.40;
 const SPR={
-  b:{freq:2.2, damp:0.18, drive:28.0, sag:0.35, upScale:0.55, downScale:1.15, max:1.05},
-  g:{freq:1.9, damp:0.22, drive:16.0, sag:0.25, upScale:0.50, downScale:1.35, max:1.00},
+  b:{freq:2.9, damp:0.15, drive:40.0, sag:0.28, upScale:0.80, downScale:1.05, max:1.00},
+  g:{freq:2.1, damp:0.20, drive:18.0, sag:0.22, upScale:0.55, downScale:1.25, max:1.00},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
 const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);
 W.sp.springs={breast,glute};
-W.sp.inflLog=[]; // ring of {t,b,g,acc,infB}
+W.sp.inflLog=[];
 
 function stepSpring(s, accY, str, dt){
   const p=s.p;
   const k=(2*Math.PI*p.freq)**2;
   const c=2*p.damp*Math.sqrt(k);
   const rest=p.sag*str;
-  const drive=-accY*p.drive*str; // chest up (+acc) → breasts lag down
+  const drive=-accY*p.drive*str;
   const n=Math.max(1, Math.ceil(dt/0.008));
   const h=dt/n;
   for(let i=0;i<n;i++){
@@ -67,36 +83,31 @@ function stepSpring(s, accY, str, dt){
   }
   const up=-p.max*p.upScale*str;
   const down=p.max*p.downScale*str;
-  if(s.x>down){s.x=down; if(s.v>0)s.v*=-0.15}
-  if(s.x<up){s.x=up; if(s.v<0)s.v*=-0.15}
+  if(s.x>down){s.x=down; if(s.v>0)s.v*=-0.12}
+  if(s.x<up){s.x=up; if(s.v<0)s.v*=-0.12}
 }
 
-// Vertical accel of chest from to_half pose (morph-based squat; no bones in GLB)
 function driverAcc(){
   if(!action) return 0;
   const dur=action.getClip().duration||1;
   const phi=((action.time/dur)%1+1)%1;
   const spd=W.sp.speed;
-  // th=0.5-0.5*cos(2πφ); chestY=CHEST_H*th; return d²chestY/dt²
   const thDotDot=2*Math.PI*Math.PI*Math.cos(2*Math.PI*phi)*(spd/dur)*(spd/dur);
   return CHEST_H*thDotDot;
 }
-
-// GPU morph influences only — drive to_half + bounce AFTER mixer (weight tracks stripped from Body/Bikini)
 function pulseHalf(){
   if(!action) return 0;
   const dur=action.getClip().duration||1;
   const phi=((action.time/dur)%1+1)%1;
-  return 0.5-0.5*Math.cos(2*Math.PI*phi); // 0=deep, 1=half
+  return 0.5-0.5*Math.cos(2*Math.PI*phi);
 }
 function applyBounce(){
-  const bb=Math.max(-0.45,Math.min(1.50,breast.x)), gg=Math.max(-0.45,Math.min(1.45,glute.x)), th=pulseHalf();
+  const bb=Math.max(-0.55,Math.min(1.20,breast.x)), gg=Math.max(-0.45,Math.min(1.35,glute.x)), th=pulseHalf();
   W.sp.bounce.b=bb; W.sp.bounce.g=gg; W.sp.bounce.th=th;
   for(const m of bodyMeshes){
     const d=m.morphTargetDictionary||{};
     const inf=m.morphTargetInfluences;
     if(!inf) continue;
-    // Never morph hair/head/face even if mis-collected
     if(/hair|eyebrow|eyelash|teeth|tongue|high-poly|eye|neck|head/i.test(m.name||'')) continue;
     const isBody=/^base$/i.test(m.name)||/^body$/i.test(m.name);
     const isBikini=/bikini/i.test(m.name||'');
@@ -109,8 +120,83 @@ function applyBounce(){
 W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;if(freeze)W.sp.freezeBounce=true;applyBounce()};
 W.sp.clearFreeze=()=>{W.sp.freezeBounce=false};
 
+function morphedLocal(mesh, vi){
+  const pos=mesh.geometry.attributes.position;
+  let x=pos.getX(vi), y=pos.getY(vi), z=pos.getZ(vi);
+  const morphs=mesh.geometry.morphAttributes?.position;
+  const infl=mesh.morphTargetInfluences;
+  if(morphs&&infl){
+    for(let t=0;t<morphs.length;t++){
+      const w=infl[t]; if(!w) continue;
+      x+=w*morphs[t].getX(vi); y+=w*morphs[t].getY(vi); z+=w*morphs[t].getZ(vi);
+    }
+  }
+  return new THREE.Vector3(x,y,z);
+}
+function morphedWorld(mesh, vi){
+  return mesh.localToWorld(morphedLocal(mesh, vi));
+}
+
+function ensureStrapMat(){
+  if(strapMat) return strapMat;
+  strapMat=new LineMaterial({
+    color:0xc4182a,
+    linewidth:0.011, // world units — ~9mm thick, phone-visible continuous ribbon
+    worldUnits:true,
+    dashed:false,
+    alphaToCoverage:true,
+  });
+  strapMat.depthTest=false;
+  strapMat.depthWrite=false;
+  strapMat.resolution.set(innerWidth, innerHeight);
+  return strapMat;
+}
+
+function rebuildStrapTube(side){
+  if(!bikiniMesh) return;
+  const a=STRAP_ANCHORS[side];
+  const rest=STRAP_REST[side];
+  let cup;
+  try { cup=morphedWorld(bikiniMesh, a.cup); }
+  catch(e){ cup=bikiniMesh.localToWorld(new THREE.Vector3(...rest.cup)); }
+  const neck=bikiniMesh.localToWorld(new THREE.Vector3(...rest.neck));
+  const clavGuide=bikiniMesh.localToWorld(new THREE.Vector3(...rest.clav));
+  // Keep path in front of body
+  cup.z += 0.014; neck.z += 0.010;
+  const clav=new THREE.Vector3().lerpVectors(cup, neck, 0.38);
+  clav.x = cup.x*0.50 + clavGuide.x*0.50;
+  clav.z = Math.max(cup.z, clavGuide.z, neck.z) + 0.050;
+  clav.y = cup.y*0.28 + neck.y*0.72;
+  const mid=new THREE.Vector3().lerpVectors(cup, clav, 0.48);
+  mid.z = Math.max(mid.z, cup.z) + 0.030;
+  const curve=new THREE.CatmullRomCurve3([cup, mid, clav, neck]);
+  const pts=curve.getPoints(48);
+  const positions=[];
+  for(const p of pts) positions.push(p.x,p.y,p.z);
+  const geo=new LineGeometry();
+  geo.setPositions(positions);
+  const key=side;
+  const parent=S;
+  if(strapTubes[key]){ parent.remove(strapTubes[key]); strapTubes[key].geometry.dispose(); }
+  const mesh=new Line2(geo, ensureStrapMat());
+  mesh.computeLineDistances();
+  mesh.frustumCulled=false;
+  mesh.renderOrder=3;
+  mesh.name='StrapTube_'+side;
+  parent.add(mesh);
+  strapTubes[key]=mesh;
+}
+
+function updateStrapTubes(){
+  if(!bikiniMesh) return;
+  bikiniMesh.updateMatrixWorld(true);
+  rebuildStrapTube('R');
+  rebuildStrapTube('L');
+}
+
 const L=new GLTFLoader();
 L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
+  modelRoot=gl.scene;
   gl.scene.traverse(o=>{
     if(!o.isMesh) return;
     o.castShadow=true;
@@ -126,7 +212,6 @@ L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
       if(/Bikini/i.test(m.name||o.name||'')){
         m.side=THREE.DoubleSide; m.roughness=0.55; m.transparent=false; m.opacity=1; m.depthWrite=true;
       }
-      // Enable GPU morph targets when present
       if(o.morphTargetInfluences&&o.morphTargetInfluences.length){
         m.morphTargets=true; m.morphNormals=true;
       }
@@ -139,26 +224,29 @@ L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
     if(o.morphTargetDictionary && ('to_half' in o.morphTargetDictionary || 'bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
       if(o.geometry) o.geometry.morphTargetsRelative=true;
     }
-    // Bounce ONLY on Body/Bikini — never hair/head/neck/face
     const isHairFace=/hair|eyebrow|eyelash|teeth|tongue|high-poly|eye/i.test(o.name||'');
     if(!isHairFace && o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
       bodyMeshes.push(o);
     }
+    if(/^bikini$/i.test(o.name||'')) bikiniMesh=o;
   });
   const box=new THREE.Box3().setFromObject(gl.scene);
   gl.scene.position.y-=box.min.y;
   S.add(gl.scene);
+  if(bikiniMesh) ensureStrapMat();
   let n=0; gl.scene.traverse(o=>{if(o.isMesh&&o.visible)n++});
   W.sp.meshes=n; W.sp.bodyBounceMeshes=bodyMeshes.length; W.sp.bodyMeshes=bodyMeshes;
+  W.sp.bikiniMesh=bikiniMesh;
   if(gl.animations&&gl.animations.length){
     mixer=new THREE.AnimationMixer(gl.scene);
     action=mixer.clipAction(gl.animations[0]);
     action.loop=THREE.LoopRepeat; action.clampWhenFinished=false;
     action.timeScale=W.sp.speed; action.play();
     W.sp.duration=gl.animations[0].duration;
-    W.sp.seek=t=>{action.time=((t%1)+1)%1*W.sp.duration;mixer.update(0);applyBounce()};
+    W.sp.seek=t=>{action.time=((t%1)+1)%1*W.sp.duration;mixer.update(0);applyBounce();updateStrapTubes()};
   }
   if(bodyMeshes[0]) W.sp.morphDict=Object.assign({}, bodyMeshes[0].morphTargetDictionary);
+  applyBounce(); updateStrapTubes();
   W.sp.ready=true; document.getElementById('msg').textContent='';
 },undefined,e=>{W.sp.errs.push(String(e)); document.getElementById('msg').textContent='Load failed'});
 
@@ -168,7 +256,7 @@ spd.oninput=()=>{W.sp.speed=+spd.value; document.getElementById('spdv').textCont
 document.getElementById('bb').oninput=e=>{W.sp.breastStr=+e.target.value; document.getElementById('bbv').textContent=(+e.target.value).toFixed(2)};
 document.getElementById('bg').oninput=e=>{W.sp.gluteStr=+e.target.value; document.getElementById('bgv').textContent=(+e.target.value).toFixed(2)};
 document.getElementById('rs').onclick=home;
-addEventListener('resize',()=>{C.aspect=innerWidth/innerHeight; C.updateProjectionMatrix(); R.setSize(innerWidth,innerHeight)});
+addEventListener('resize',()=>{C.aspect=innerWidth/innerHeight; C.updateProjectionMatrix(); R.setSize(innerWidth,innerHeight); if(strapMat) strapMat.resolution.set(innerWidth,innerHeight);});
 
 const clock=new THREE.Clock();
 R.setAnimationLoop(()=>{
@@ -185,8 +273,8 @@ R.setAnimationLoop(()=>{
     stepSpring(breast, 0, W.sp.breastStr, dt);
     stepSpring(glute, 0, W.sp.gluteStr, dt);
   }
-  applyBounce(); // after mixer so bounce tracks (if zero) don't win
-  // Log influences each frame for live QC
+  applyBounce();
+  updateStrapTubes();
   const _m=bodyMeshes[0];
   const _inf=_m&&_m.morphTargetDictionary&&_m.morphTargetDictionary.bounce_breast!=null?_m.morphTargetInfluences[_m.morphTargetDictionary.bounce_breast]:0;
   const _log=W.sp.inflLog; _log.push({t:performance.now(),b:W.sp.bounce.b,g:W.sp.bounce.g,acc:W.sp.bounce.acc,infB:_inf});
