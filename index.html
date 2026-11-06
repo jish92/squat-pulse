@@ -83,29 +83,24 @@ function overlayBounce(){
   for(const m of bodyMeshes){
     const d=m.morphTargetDictionary||{};
     const geo=m.geometry;
-    if(!geo||!geo.attributes||!geo.attributes.position) continue;
     const pos=geo.attributes.position;
     const morphs=geo.morphAttributes&&geo.morphAttributes.position;
-    if(!morphs) continue;
-    // Keep GPU influences at 0 (CPU owns deformation)
+    if(!morphs||!m.userData._basePos) continue;
     if(m.morphTargetInfluences) m.morphTargetInfluences.fill(0);
-    if(!m.userData._basePos){
-      m.userData._basePos=Float32Array.from(pos.array);
-      m.userData._mTH=d.to_half!=null?morphs[d.to_half]:null;
-      m.userData._mBB=d.bounce_breast!=null?morphs[d.bounce_breast]:null;
-      m.userData._mBG=d.bounce_glute!=null?morphs[d.bounce_glute]:null;
+    if(!m.userData._mTH){
+      m.userData._mTH=d.to_half!=null?morphs[d.to_half].array:null;
+      m.userData._mBB=d.bounce_breast!=null?morphs[d.bounce_breast].array:null;
+      m.userData._mBG=d.bounce_glute!=null?morphs[d.bounce_glute].array:null;
     }
-    const base=m.userData._basePos;
-    const mTH=m.userData._mTH, mBB=m.userData._mBB, mBG=m.userData._mBG;
+    const base=m.userData._basePos, mTH=m.userData._mTH, mBB=m.userData._mBB, mBG=m.userData._mBG;
     const arr=pos.array;
-    const nVert=pos.count;
-    for(let vi=0; vi<nVert; vi++){
-      const i=vi*3;
-      let x=base[i], y=base[i+1], z=base[i+2];
-      if(mTH){ x+=mTH.getX(vi)*th; y+=mTH.getY(vi)*th; z+=mTH.getZ(vi)*th; }
-      if(mBB){ x+=mBB.getX(vi)*bb; y+=mBB.getY(vi)*bb; z+=mBB.getZ(vi)*bb; }
-      if(mBG){ x+=mBG.getX(vi)*gg; y+=mBG.getY(vi)*gg; z+=mBG.getZ(vi)*gg; }
-      arr[i]=x; arr[i+1]=y; arr[i+2]=z;
+    const n=base.length;
+    for(let i=0;i<n;i++){
+      let v=base[i];
+      if(mTH) v+=mTH[i]*th;
+      if(mBB) v+=mBB[i]*bb;
+      if(mBG) v+=mBG[i]*gg;
+      arr[i]=v;
     }
     pos.needsUpdate=true;
   }
@@ -119,10 +114,24 @@ const L=new GLTFLoader();L.setMeshoptDecoder(MeshoptDecoder);
 L.load('female_squat_pulse_v4.glb',gl=>{
   gl.scene.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{if(!m)return;if(/hair|eyebrow|eyelash|high-poly/i.test(m.name||o.name||'')){m.alphaTest=0.5;m.side=THREE.DoubleSide}else{m.alphaTest=0;m.transparent=false;m.opacity=1;m.depthWrite=true}if(/Bikini/i.test(m.name||o.name||'')){m.side=THREE.DoubleSide;m.roughness=0.55;m.transparent=false;m.opacity=1;m.depthWrite=true}m.needsUpdate=true});
     if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
-      // CPU morph path: disable GPU morphTargets so position writes are visible
       const mats=Array.isArray(o.material)?o.material:[o.material];
       mats.forEach(m=>{ if(!m)return; m.morphTargets=false; m.morphNormals=false; m.needsUpdate=true; });
       if(o.morphTargetInfluences) o.morphTargetInfluences.fill(0);
+      // Decode quantized positions + morphs to float so CPU writes are visible
+      const geo=o.geometry, pos=geo.attributes.position, n=pos.count;
+      const base=new Float32Array(n*3);
+      for(let i=0;i<n;i++){ base[i*3]=pos.getX(i); base[i*3+1]=pos.getY(i); base[i*3+2]=pos.getZ(i); }
+      geo.setAttribute('position', new THREE.BufferAttribute(base,3));
+      const morphs=geo.morphAttributes&&geo.morphAttributes.position;
+      if(morphs){
+        const decoded=morphs.map(attr=>{
+          const a=new Float32Array(n*3);
+          for(let i=0;i<n;i++){ a[i*3]=attr.getX(i); a[i*3+1]=attr.getY(i); a[i*3+2]=attr.getZ(i); }
+          return new THREE.BufferAttribute(a,3);
+        });
+        geo.morphAttributes.position=decoded;
+      }
+      o.userData._basePos=base.slice();
       bodyMeshes.push(o);
     }
   }});
