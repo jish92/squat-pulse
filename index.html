@@ -58,7 +58,7 @@ const STRAP_ANCHORS={
 };
 
 // Morph travel ~14cm; spring snappier so bounce still reads clearly
-const BUILD='20261106s';
+const BUILD='20261106t';
 const CHEST_H=0.40;
 const SPR={
   b:{freq:2.9, damp:0.15, drive:40.0, sag:0.28, upScale:0.80, downScale:1.05, max:1.00},
@@ -141,10 +141,9 @@ function ensureStrapMat(){
   if(strapMat) return strapMat;
   strapMat=new LineMaterial({
     color:0xc4182a,
-    linewidth:0.011, // world units — ~9mm thick, phone-visible continuous ribbon
-    worldUnits:true,
+    linewidth:6, // screen pixels — solid continuous on phone/SwiftShader
+    worldUnits:false,
     dashed:false,
-    alphaToCoverage:true,
   });
   strapMat.depthTest=false;
   strapMat.depthWrite=false;
