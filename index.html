@@ -40,21 +40,25 @@ ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;S.add(ground);
 const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,freezeBounce:false,errs:[],bounce:{b:0,g:0,acc:0}};
 let mixer=null,action=null,bodyMeshes=[];
 
-// Jog-v6g spring: lag/overshoot, damp, sink more than rise
+// Jog-v6g-style vertical spring: lag/overshoot, damp, sag lower than rise.
+// Morph deltas are mainly -Y (down). Positive influence = breasts drop.
+const BUILD='20261106c';
+const CHEST_H=0.40; // meters of vertical chest travel in to_half (no skeleton in GLB)
 const SPR={
-  b:{freq:2.5, damp:0.22, drive:12.0, sag:0.28, upScale:0.50, downScale:1.25, max:0.95},
-  g:{freq:2.0, damp:0.26, drive:8.0, sag:0.20, upScale:0.50, downScale:1.30, max:0.90},
+  b:{freq:2.2, damp:0.18, drive:28.0, sag:0.35, upScale:0.55, downScale:1.45, max:1.20},
+  g:{freq:1.9, damp:0.22, drive:16.0, sag:0.25, upScale:0.50, downScale:1.35, max:1.00},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
 const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);
 W.sp.springs={breast,glute};
+W.sp.inflLog=[]; // ring of {t,b,g,acc,infB}
 
 function stepSpring(s, accY, str, dt){
   const p=s.p;
   const k=(2*Math.PI*p.freq)**2;
   const c=2*p.damp*Math.sqrt(k);
   const rest=p.sag*str;
-  const drive=-accY*p.drive*str;
+  const drive=-accY*p.drive*str; // chest up (+acc) → breasts lag down
   const n=Math.max(1, Math.ceil(dt/0.008));
   const h=dt/n;
   for(let i=0;i<n;i++){
@@ -67,12 +71,15 @@ function stepSpring(s, accY, str, dt){
   if(s.x<up){s.x=up; if(s.v<0)s.v*=-0.15}
 }
 
+// Vertical accel of chest from to_half pose (morph-based squat; no bones in GLB)
 function driverAcc(){
   if(!action) return 0;
   const dur=action.getClip().duration||1;
   const phi=((action.time/dur)%1+1)%1;
   const spd=W.sp.speed;
-  return 2*Math.PI*Math.PI*Math.cos(2*Math.PI*phi)*(spd*spd);
+  // th=0.5-0.5*cos(2πφ); chestY=CHEST_H*th; return d²chestY/dt²
+  const thDotDot=2*Math.PI*Math.PI*Math.cos(2*Math.PI*phi)*(spd/dur)*(spd/dur);
+  return CHEST_H*thDotDot;
 }
 
 // GPU morph influences only — drive to_half + bounce AFTER mixer (weight tracks stripped from Body/Bikini)
@@ -83,7 +90,7 @@ function pulseHalf(){
   return 0.5-0.5*Math.cos(2*Math.PI*phi); // 0=deep, 1=half
 }
 function applyBounce(){
-  const bb=Math.max(-0.55,Math.min(1.35,breast.x)), gg=Math.max(-0.55,Math.min(1.35,glute.x)), th=pulseHalf();
+  const bb=Math.max(-0.45,Math.min(1.50,breast.x)), gg=Math.max(-0.45,Math.min(1.45,glute.x)), th=pulseHalf();
   W.sp.bounce.b=bb; W.sp.bounce.g=gg; W.sp.bounce.th=th;
   for(const m of bodyMeshes){
     const d=m.morphTargetDictionary||{};
@@ -103,7 +110,7 @@ W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breas
 W.sp.clearFreeze=()=>{W.sp.freezeBounce=false};
 
 const L=new GLTFLoader();
-L.load('female_squat_pulse_v4.glb',gl=>{
+L.load('female_squat_pulse_v4.glb?v='+BUILD,gl=>{
   gl.scene.traverse(o=>{
     if(!o.isMesh) return;
     o.castShadow=true;
@@ -179,6 +186,11 @@ R.setAnimationLoop(()=>{
     stepSpring(glute, 0, W.sp.gluteStr, dt);
   }
   applyBounce(); // after mixer so bounce tracks (if zero) don't win
+  // Log influences each frame for live QC
+  const _m=bodyMeshes[0];
+  const _inf=_m&&_m.morphTargetDictionary&&_m.morphTargetDictionary.bounce_breast!=null?_m.morphTargetInfluences[_m.morphTargetDictionary.bounce_breast]:0;
+  const _log=W.sp.inflLog; _log.push({t:performance.now(),b:W.sp.bounce.b,g:W.sp.bounce.g,acc:W.sp.bounce.acc,infB:_inf});
+  if(_log.length>240) _log.splice(0,_log.length-240);
   O.update(); R.render(S,C);
 });
 </script></body></html>
