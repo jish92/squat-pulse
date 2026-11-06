@@ -89,11 +89,13 @@ function applyBounce(){
     const d=m.morphTargetDictionary||{};
     const inf=m.morphTargetInfluences;
     if(!inf) continue;
-    // mesh name is "base" for Body node; "Bikini" for bikini
+    // Never morph hair/head/face even if mis-collected
+    if(/hair|eyebrow|eyelash|teeth|tongue|high-poly|eye|neck|head/i.test(m.name||'')) continue;
     const isBody=/^base$/i.test(m.name)||/^body$/i.test(m.name);
+    const isBikini=/bikini/i.test(m.name||'');
+    if(!isBody && !isBikini) continue;
     if(d.to_half!=null) inf[d.to_half]=th;
-    // body underdrive keeps bikini cups covering at peak sag
-    if(d.bounce_breast!=null) inf[d.bounce_breast]=isBody?bb*0.95:bb;
+    if(d.bounce_breast!=null) inf[d.bounce_breast]=isBody?0:bb; // Body breast morph zeroed; Bikini cups only
     if(d.bounce_glute!=null) inf[d.bounce_glute]=isBody?gg*0.95:gg;
   }
 }
@@ -127,8 +129,12 @@ L.load('female_squat_pulse_v4.glb',gl=>{
       o.geometry.computeBoundingSphere();
       o.geometry.computeBoundingBox();
     }
-    if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary || 'to_half' in o.morphTargetDictionary)){
+    if(o.morphTargetDictionary && ('to_half' in o.morphTargetDictionary || 'bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
       if(o.geometry) o.geometry.morphTargetsRelative=true;
+    }
+    // Bounce ONLY on Body/Bikini — never hair/head/neck/face
+    const isHairFace=/hair|eyebrow|eyelash|teeth|tongue|high-poly|eye/i.test(o.name||'');
+    if(!isHairFace && o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
       bodyMeshes.push(o);
     }
   });
