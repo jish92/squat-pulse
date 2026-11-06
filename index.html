@@ -13,7 +13,7 @@ const R=new THREE.WebGLRenderer({antialias:true});R.setPixelRatio(Math.min(devic
 const S=new THREE.Scene();S.background=new THREE.Color(0xc9ccd1);S.environment=new THREE.PMREMGenerator(R).fromScene(new RoomEnvironment(),0.04).texture;S.environmentIntensity=0.5;
 const C=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,0.05,50);
 const O=new OrbitControls(C,R.domElement);O.enableDamping=true;O.minDistance=0.4;O.maxDistance=8;
-function home(){const ph=innerWidth<innerHeight;C.position.set(ph?0.55:1.2,ph?1.15:1.05,ph?3.6:2.9);O.target.set(0,0.55,0);O.update()}home();
+function home(){const ph=innerWidth<innerHeight;C.position.set(ph?0.35:1.15,ph?0.95:0.95,ph?4.4:3.5);O.target.set(0,0.48,0);O.update()}home();
 S.add(new THREE.HemisphereLight(0xffffff,0x8d8a85,1.7));const dl=new THREE.DirectionalLight(0xffffff,1.9);dl.position.set(3,6,4);dl.castShadow=true;dl.shadow.mapSize.set(2048,2048);Object.assign(dl.shadow.camera,{left:-2,right:2,top:3,bottom:-1});S.add(dl);
 const g=new THREE.Mesh(new THREE.CircleGeometry(8,64),new THREE.MeshStandardMaterial({color:0xb8bbbf,roughness:1}));g.rotation.x=-Math.PI/2;g.receiveShadow=true;S.add(g);
 const W=window;W.sp={ready:false,playing:true,speed:1,errs:[]};
@@ -30,6 +30,7 @@ L.load('female_squat_pulse_v3.glb',gl=>{
     // Clip is 60 frames @ 60fps = 1s = 1 rep; timeScale = reps/sec
     action.timeScale=W.sp.speed;action.play();
     W.sp.duration=gl.animations[0].duration;
+    W.sp.seek=t=>{action.time=((t%1)+1)%1*W.sp.duration;mixer.update(0)};
   }
   W.sp.ready=true;document.getElementById('msg').textContent='';
 },undefined,e=>{W.sp.errs.push(String(e));document.getElementById('msg').textContent='Load failed'});
