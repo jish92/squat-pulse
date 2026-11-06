@@ -95,11 +95,15 @@ function overlayBounce(){
     const base=m.userData._basePos, mTH=m.userData._mTH, mBB=m.userData._mBB, mBG=m.userData._mBG;
     const arr=pos.array;
     const n=base.length;
+    // Body skin slightly under-drives breast bounce vs bikini to avoid strap poke-through
+    const isBody=/^base$/i.test(m.name)||/^body$/i.test(m.name);
+    const bbUse=isBody?bb*0.55:bb;
+    const bgUse=isBody?bg*0.85:bg;
     for(let i=0;i<n;i++){
       let v=base[i];
       if(mTH) v+=mTH[i]*th;
-      if(mBB) v+=mBB[i]*bb;
-      if(mBG) v+=mBG[i]*gg;
+      if(mBB) v+=mBB[i]*bbUse;
+      if(mBG) v+=mBG[i]*bgUse;
       arr[i]=v;
     }
     pos.needsUpdate=true;
