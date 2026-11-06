@@ -83,7 +83,7 @@ function pulseHalf(){
   return 0.5-0.5*Math.cos(2*Math.PI*phi); // 0=deep, 1=half
 }
 function applyBounce(){
-  const bb=Math.max(-0.55,Math.min(1.05,breast.x)), gg=Math.max(-0.55,Math.min(1.05,glute.x)), th=pulseHalf();
+  const bb=Math.max(-0.55,Math.min(1.35,breast.x)), gg=Math.max(-0.55,Math.min(1.35,glute.x)), th=pulseHalf();
   W.sp.bounce.b=bb; W.sp.bounce.g=gg; W.sp.bounce.th=th;
   for(const m of bodyMeshes){
     const d=m.morphTargetDictionary||{};
@@ -93,7 +93,7 @@ function applyBounce(){
     const isBody=/^base$/i.test(m.name)||/^body$/i.test(m.name);
     if(d.to_half!=null) inf[d.to_half]=th;
     // body underdrive keeps bikini cups covering at peak sag
-    if(d.bounce_breast!=null) inf[d.bounce_breast]=isBody?bb*0.92:bb;
+    if(d.bounce_breast!=null) inf[d.bounce_breast]=isBody?bb*0.95:bb;
     if(d.bounce_glute!=null) inf[d.bounce_glute]=isBody?gg*0.95:gg;
   }
 }
