@@ -3,10 +3,17 @@
 <style>html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#c9ccd1}canvas{display:block;touch-action:none}
 #ui{position:fixed;left:8px;bottom:8px;background:rgba(255,255,255,.92);border-radius:10px;padding:8px 10px;font-size:14px;max-width:calc(100vw - 36px);box-shadow:0 1px 6px rgba(0,0,0,.15)}
 #ui button{font-size:16px;padding:8px 14px;border-radius:8px;border:1px solid #999;background:#fff;margin-right:6px}
-#ui input[type=range]{width:min(260px,52vw);vertical-align:middle}#msg{position:fixed;top:45%;width:100%;text-align:center;font-size:18px;color:#555}</style>
+#ui input[type=range]{width:min(220px,48vw);vertical-align:middle}
+#ui .row{margin-top:6px}#msg{position:fixed;top:45%;width:100%;text-align:center;font-size:18px;color:#555}</style>
 <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.169.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.169.0/examples/jsm/"}}</script></head><body>
 <div id="msg">Loading…</div>
-<div id="ui"><button id="pp">⏸ Pause</button><button id="rs">Reset view</button><div style="margin-top:6px">Speed <input id="spd" type="range" min="0.3" max="2" step="0.05" value="1"> <span id="spdv">1.00</span> /s</div><div style="font-size:11px;color:#666;margin-top:4px">Drag to orbit · pinch / scroll to zoom</div></div>
+<div id="ui">
+  <button id="pp">⏸ Pause</button><button id="rs">Reset view</button>
+  <div class="row">Speed <input id="spd" type="range" min="0.3" max="2" step="0.05" value="1"> <span id="spdv">1.00</span> /s</div>
+  <div class="row">Breast bounce <input id="bb" type="range" min="0" max="2" step="0.05" value="1"> <span id="bbv">1.00</span>×</div>
+  <div class="row">Glute bounce <input id="bg" type="range" min="0" max="2" step="0.05" value="1"> <span id="bgv">1.00</span>×</div>
+  <div style="font-size:11px;color:#666;margin-top:4px">Drag to orbit · pinch / scroll to zoom</div>
+</div>
 <script type="module">
 import * as THREE from 'three';import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';import {OrbitControls} from 'three/addons/controls/OrbitControls.js';import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 const R=new THREE.WebGLRenderer({antialias:true});R.setPixelRatio(Math.min(devicePixelRatio,2));R.setSize(innerWidth,innerHeight);R.shadowMap.enabled=true;R.shadowMap.type=THREE.PCFSoftShadowMap;R.outputColorSpace=THREE.SRGBColorSpace;R.toneMapping=THREE.ACESFilmicToneMapping;document.body.prepend(R.domElement);
@@ -16,29 +23,109 @@ const O=new OrbitControls(C,R.domElement);O.enableDamping=true;O.minDistance=0.4
 function home(){const ph=innerWidth<innerHeight;C.position.set(ph?0.35:1.15,ph?0.95:0.95,ph?4.4:3.5);O.target.set(0,0.48,0);O.update()}home();
 S.add(new THREE.HemisphereLight(0xffffff,0x8d8a85,1.7));const dl=new THREE.DirectionalLight(0xffffff,1.9);dl.position.set(3,6,4);dl.castShadow=true;dl.shadow.mapSize.set(2048,2048);Object.assign(dl.shadow.camera,{left:-2,right:2,top:3,bottom:-1});S.add(dl);
 const g=new THREE.Mesh(new THREE.CircleGeometry(8,64),new THREE.MeshStandardMaterial({color:0xb8bbbf,roughness:1}));g.rotation.x=-Math.PI/2;g.receiveShadow=true;S.add(g);
-const W=window;W.sp={ready:false,playing:true,speed:1,errs:[]};
-let mixer=null,action=null;
+
+const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,errs:[],bounce:{b:0,g:0,acc:0}};
+let mixer=null,action=null,bodyMeshes=[];
+
+// Jog-v6g-like spring: lag/overshoot vertical motion, damp, sink more than rise
+const SPR={
+  // breast: slightly softer, lower rest (sag), larger travel down
+  b:{freq:3.2, damp:0.30, drive:0.055, sag:0.035, upScale:0.55, downScale:1.35, max:0.22},
+  g:{freq:2.6, damp:0.34, drive:0.028, sag:0.012, upScale:0.60, downScale:1.25, max:0.12},
+};
+function makeSpring(p){return {x:p.sag, v:0, p}}
+const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);
+
+function stepSpring(s, accY, str, dt){
+  // accY: world vertical accel of driver (+up). Soft tissue lags → force ∝ -acc
+  const p=s.p;
+  const k=(2*Math.PI*p.freq)**2;
+  const c=2*p.damp*Math.sqrt(k);
+  // rest biased downward (sag); strength scales drive+sag visibility
+  const rest=p.sag*str;
+  const drive=-accY*p.drive*str;
+  // substeps for stability at high speed
+  const n=Math.max(1, Math.ceil(dt/0.008));
+  const h=dt/n;
+  for(let i=0;i<n;i++){
+    const a=drive - k*(s.x-rest) - c*s.v;
+    s.v+=a*h; s.x+=s.v*h;
+  }
+  // asymmetric clamp: allow more sink (positive x = down along morph) than rise
+  const up=-p.max*p.upScale*str;   // morph negative = upward bounce
+  const down=p.max*p.downScale*str;
+  if(s.x>down){s.x=down; if(s.v>0)s.v*=-0.15}
+  if(s.x<up){s.x=up; if(s.v<0)s.v*=-0.15}
+}
+
+// Vertical height proxy from squat phase: deep=0, half=1
+// h(t)=0.5-0.5*cos(2πφ); φ=action.time/duration (duration=1s at 1rep/s)
+// With timeScale=speed, φ_dot=speed, h'=π sin(2πφ) speed, h''=2π² cos(2πφ) speed²
+function driverAcc(){
+  if(!action) return 0;
+  const dur=action.getClip().duration||1;
+  const phi=((action.time/dur)%1+1)%1;
+  const spd=W.sp.speed;
+  return 2*Math.PI*Math.PI*Math.cos(2*Math.PI*phi)*(spd*spd);
+}
+
+function applyBounce(){
+  const bb=breast.x, gg=glute.x;
+  W.sp.bounce.b=bb; W.sp.bounce.g=gg;
+  for(const m of bodyMeshes){
+    const d=m.morphTargetDictionary||{};
+    const inf=m.morphTargetInfluences;
+    if(!inf) continue;
+    if(d.bounce_breast!=null) inf[d.bounce_breast]=bb;
+    if(d.bounce_glute!=null) inf[d.bounce_glute]=gg;
+  }
+}
+
 const L=new GLTFLoader();L.setMeshoptDecoder(MeshoptDecoder);
-L.load('female_squat_pulse_v3.glb',gl=>{
-  gl.scene.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{if(!m)return;if(/hair|eyebrow|eyelash|high-poly/i.test(m.name||o.name||'')){m.alphaTest=0.5;m.side=THREE.DoubleSide}else{m.alphaTest=0;m.transparent=false;m.opacity=1;m.depthWrite=true}if(/Bikini/i.test(m.name||o.name||'')){m.side=THREE.DoubleSide;m.roughness=0.55;m.transparent=false;m.opacity=1;m.depthWrite=true}m.needsUpdate=true})}});
+L.load('female_squat_pulse_v4.glb',gl=>{
+  gl.scene.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{if(!m)return;if(/hair|eyebrow|eyelash|high-poly/i.test(m.name||o.name||'')){m.alphaTest=0.5;m.side=THREE.DoubleSide}else{m.alphaTest=0;m.transparent=false;m.opacity=1;m.depthWrite=true}if(/Bikini/i.test(m.name||o.name||'')){m.side=THREE.DoubleSide;m.roughness=0.55;m.transparent=false;m.opacity=1;m.depthWrite=true}m.needsUpdate=true});
+    if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
+      bodyMeshes.push(o);
+    }
+  }});
   const b=new THREE.Box3().setFromObject(gl.scene);gl.scene.position.y-=b.min.y;S.add(gl.scene);
-  let n=0;gl.scene.traverse(o=>{if(o.isMesh&&o.visible)n++});W.sp.meshes=n;
+  let n=0;gl.scene.traverse(o=>{if(o.isMesh&&o.visible)n++});W.sp.meshes=n;W.sp.bodyBounceMeshes=bodyMeshes.length;
   if(gl.animations&&gl.animations.length){
     mixer=new THREE.AnimationMixer(gl.scene);
     action=mixer.clipAction(gl.animations[0]);
     action.loop=THREE.LoopRepeat;action.clampWhenFinished=false;
-    // Clip is 60 frames @ 60fps = 1s = 1 rep; timeScale = reps/sec
     action.timeScale=W.sp.speed;action.play();
     W.sp.duration=gl.animations[0].duration;
-    W.sp.seek=t=>{action.time=((t%1)+1)%1*W.sp.duration;mixer.update(0)};
+    W.sp.seek=t=>{action.time=((t%1)+1)%1*W.sp.duration;mixer.update(0);applyBounce()};
   }
+  // dict sample
+  if(bodyMeshes[0]) W.sp.morphDict=Object.assign({}, bodyMeshes[0].morphTargetDictionary);
   W.sp.ready=true;document.getElementById('msg').textContent='';
 },undefined,e=>{W.sp.errs.push(String(e));document.getElementById('msg').textContent='Load failed'});
-const pp=document.getElementById('pp'),sp=document.getElementById('spd');
+
+const pp=document.getElementById('pp'),spd=document.getElementById('spd');
 pp.onclick=()=>{W.sp.playing=!W.sp.playing;if(action)action.paused=!W.sp.playing;pp.textContent=W.sp.playing?'⏸ Pause':'▶ Play'};
-sp.oninput=()=>{W.sp.speed=+sp.value;document.getElementById('spdv').textContent=(+sp.value).toFixed(2);if(action)action.timeScale=W.sp.speed};
+spd.oninput=()=>{W.sp.speed=+spd.value;document.getElementById('spdv').textContent=(+spd.value).toFixed(2);if(action)action.timeScale=W.sp.speed};
+document.getElementById('bb').oninput=e=>{W.sp.breastStr=+e.target.value;document.getElementById('bbv').textContent=(+e.target.value).toFixed(2)};
+document.getElementById('bg').oninput=e=>{W.sp.gluteStr=+e.target.value;document.getElementById('bgv').textContent=(+e.target.value).toFixed(2)};
 document.getElementById('rs').onclick=home;
 addEventListener('resize',()=>{C.aspect=innerWidth/innerHeight;C.updateProjectionMatrix();R.setSize(innerWidth,innerHeight)});
+
 const clock=new THREE.Clock();
-R.setAnimationLoop(()=>{const dt=clock.getDelta();if(mixer&&W.sp.playing)mixer.update(dt);O.update();R.render(S,C)});
+R.setAnimationLoop(()=>{
+  const dt=Math.min(clock.getDelta(),0.05);
+  if(mixer&&W.sp.playing){
+    mixer.update(dt);
+    const acc=driverAcc();
+    W.sp.bounce.acc=acc;
+    stepSpring(breast, acc, W.sp.breastStr, dt);
+    stepSpring(glute, acc, W.sp.gluteStr, dt);
+  } else if(mixer){
+    // still settle springs gently when paused
+    stepSpring(breast, 0, W.sp.breastStr, dt);
+    stepSpring(glute, 0, W.sp.gluteStr, dt);
+  }
+  applyBounce();
+  O.update();R.render(S,C);
+});
 </script></body></html>
