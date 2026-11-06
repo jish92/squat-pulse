@@ -31,8 +31,8 @@ let mixer=null,action=null,bodyMeshes=[];
 const SPR={
   // Tuned so |acc|~20 at 1rep/s yields ~0.10 breast / ~0.05 glute morph (clearly visible)
   // drive ≈ desired_amp * (2πf)² / typical_acc
-  b:{freq:2.8, damp:0.26, drive:6.5, sag:0.18, upScale:0.50, downScale:1.10, max:0.75},
-  g:{freq:2.3, damp:0.30, drive:3.5, sag:0.12, upScale:0.55, downScale:1.15, max:0.65},
+  b:{freq:2.7, damp:0.24, drive:9.0, sag:0.22, upScale:0.55, downScale:1.15, max:0.80},
+  g:{freq:2.2, damp:0.28, drive:5.0, sag:0.15, upScale:0.55, downScale:1.20, max:0.70},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
 const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);W.sp.springs={breast,glute};
