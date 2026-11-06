@@ -1,5 +1,5 @@
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>Squat pulse</title>
+<title>Squat pulse v5b</title>
 <style>html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#c9ccd1}canvas{display:block;touch-action:none}
 #ui{position:fixed;left:8px;bottom:8px;background:rgba(255,255,255,.92);border-radius:10px;padding:8px 10px;font-size:14px;max-width:calc(100vw - 36px);box-shadow:0 1px 6px rgba(0,0,0,.15)}
 #ui button{font-size:16px;padding:8px 14px;border-radius:8px;border:1px solid #999;background:#fff;margin-right:6px}
@@ -10,8 +10,8 @@
 <div id="ui">
   <button id="pp">⏸ Pause</button><button id="rs">Reset view</button>
   <div class="row">Speed <input id="spd" type="range" min="0.3" max="2" step="0.05" value="1"> <span id="spdv">1.00</span> /s</div>
-  <div class="row">Breast bounce <input id="bb" type="range" min="0" max="2" step="0.05" value="1"> <span id="bbv">1.00</span>×</div>
-  <div class="row">Glute bounce <input id="bg" type="range" min="0" max="2" step="0.05" value="1"> <span id="bgv">1.00</span>×</div>
+  <div class="row">Breast bounce <input id="bb" type="range" min="0" max="1" step="0.05" value="1"> <span id="bbv">1.00</span>×</div>
+  <div class="row">Glute bounce <input id="bg" type="range" min="0" max="1" step="0.05" value="1"> <span id="bgv">1.00</span>×</div>
   <div style="font-size:11px;color:#666;margin-top:4px">Drag to orbit · pinch / scroll to zoom</div>
 </div>
 <script type="module">
@@ -37,148 +37,56 @@ Object.assign(dl.shadow.camera,{left:-2,right:2,top:3,bottom:-1});S.add(dl);
 const ground=new THREE.Mesh(new THREE.CircleGeometry(8,64),new THREE.MeshStandardMaterial({color:0xb8bbbf,roughness:1}));
 ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;S.add(ground);
 
-const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,freezeBounce:false,errs:[],bounce:{b:0,g:0,acc:0}};
-let mixer=null,action=null,bodyMeshes=[];
-
-// Jog-v6g spring: lag/overshoot, damp, sink more than rise
-const SPR={
-  b:{freq:2.9, damp:0.15, drive:40.0, sag:0.28, upScale:0.80, downScale:1.05, max:1.00},
-  g:{freq:2.1, damp:0.20, drive:18.0, sag:0.22, upScale:0.55, downScale:1.25, max:1.00},
-};
-function makeSpring(p){return {x:p.sag, v:0, p}}
-const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);
-W.sp.springs={breast,glute};
-
-function stepSpring(s, accY, str, dt){
-  const p=s.p;
-  const k=(2*Math.PI*p.freq)**2;
-  const c=2*p.damp*Math.sqrt(k);
-  const rest=p.sag*str;
-  const drive=-accY*p.drive*str;
-  const n=Math.max(1, Math.ceil(dt/0.008));
-  const h=dt/n;
-  for(let i=0;i<n;i++){
-    const a=drive - k*(s.x-rest) - c*s.v;
-    s.v+=a*h; s.x+=s.v*h;
-  }
-  const up=-p.max*p.upScale*str;
-  const down=p.max*p.downScale*str;
-  if(s.x>down){s.x=down; if(s.v>0)s.v*=-0.15}
-  if(s.x<up){s.x=up; if(s.v<0)s.v*=-0.15}
+// v5b bone bounce: baked 'squat_bounce' clip; strength = per-bone weight blend of bounce tracks vs rest tracks
+function boneBounce(mixer,clip,root){
+  const isB=n=>/^breast_[lr]\./.test(n), isG=n=>/^glute_[lr]\./.test(n);
+  const main=[],bB=[],bG=[],rB=[],rG=[];
+  const restTrack=t=>{const bn=t.name.split('.')[0],pr=t.name.split('.')[1];const o=root.getObjectByName(bn);const v=o[pr==='quaternion'?'quaternion':pr==='scale'?'scale':'position'].toArray();
+    const T=pr==='quaternion'?THREE.QuaternionKeyframeTrack:THREE.VectorKeyframeTrack;return new T(t.name,[0,clip.duration],v.concat(v))};
+  for(const t of clip.tracks){if(isB(t.name)){bB.push(t);rB.push(restTrack(t))}else if(isG(t.name)){bG.push(t);rG.push(restTrack(t))}else main.push(t)}
+  const mk=(n,tr)=>{const a=mixer.clipAction(new THREE.AnimationClip(n,clip.duration,tr));a.loop=THREE.LoopRepeat;a.play();return a};
+  const A={main:mk('main',main),bB:mk('bB',bB),rB:mk('rB',rB),bG:mk('bG',bG),rG:mk('rG',rG)};
+  const all=Object.values(A);
+  return {A,
+    setB(s){A.bB.setEffectiveWeight(s);A.rB.setEffectiveWeight(1-s)},
+    setG(s){A.bG.setEffectiveWeight(s);A.rG.setEffectiveWeight(1-s)},
+    setSpeed(v){all.forEach(a=>a.timeScale=v)},
+    setPaused(p){all.forEach(a=>a.paused=p)},
+    get time(){return A.main.time}, set time(t){all.forEach(a=>a.time=t)}};
 }
 
-function driverAcc(){
-  if(!action) return 0;
-  const dur=action.getClip().duration||1;
-  const phi=((action.time/dur)%1+1)%1;
-  const spd=W.sp.speed;
-  return 2*Math.PI*Math.PI*Math.cos(2*Math.PI*phi)*(spd*spd);
-}
-
-// GPU morph influences only — drive to_half + bounce AFTER mixer (weight tracks stripped from Body/Bikini)
-function pulseHalf(){
-  if(!action) return 0;
-  const dur=action.getClip().duration||1;
-  const phi=((action.time/dur)%1+1)%1;
-  return 0.5-0.5*Math.cos(2*Math.PI*phi); // 0=deep, 1=half
-}
-function applyBounce(){
-  const bb=Math.max(-0.55,Math.min(1.35,breast.x)), gg=Math.max(-0.55,Math.min(1.35,glute.x)), th=pulseHalf();
-  W.sp.bounce.b=bb; W.sp.bounce.g=gg; W.sp.bounce.th=th;
-  for(const m of bodyMeshes){
-    const d=m.morphTargetDictionary||{};
-    const inf=m.morphTargetInfluences;
-    if(!inf) continue;
-    // Never morph hair/head/face even if mis-collected
-    if(/hair|eyebrow|eyelash|teeth|tongue|high-poly|eye|neck|head/i.test(m.name||'')) continue;
-    const isBody=/^base$/i.test(m.name)||/^body$/i.test(m.name);
-    const isBikini=/bikini/i.test(m.name||'');
-    if(!isBody && !isBikini) continue;
-    if(d.to_half!=null) inf[d.to_half]=th;
-    if(d.bounce_breast!=null) inf[d.bounce_breast]=isBody?bb*0.95:bb;
-    if(d.bounce_glute!=null) inf[d.bounce_glute]=isBody?gg*0.95:gg;
-  }
-}
-W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;if(freeze)W.sp.freezeBounce=true;applyBounce()};
-W.sp.clearFreeze=()=>{W.sp.freezeBounce=false};
-
+const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,errs:[],model:'v5b'};
+let mixer=null,BB=null;
 const L=new GLTFLoader();
-L.load('female_squat_pulse_v4.glb?v=20261106blender3b',gl=>{
+L.load('female_squat_pulse_v5b.glb?v=20261106v5b',gl=>{
   gl.scene.traverse(o=>{
     if(!o.isMesh) return;
-    o.castShadow=true;
-    o.frustumCulled=false;
+    o.castShadow=true; o.frustumCulled=false;
     const mats=Array.isArray(o.material)?o.material:[o.material];
-    mats.forEach(m=>{
-      if(!m) return;
-      if(/hair|eyebrow|eyelash|high-poly/i.test(m.name||o.name||'')){
-        m.alphaTest=0.5; m.side=THREE.DoubleSide;
-      } else {
-        m.alphaTest=0; m.transparent=false; m.opacity=1; m.depthWrite=true;
-      }
-      if(/Bikini/i.test(m.name||o.name||'')){
-        m.side=THREE.DoubleSide; m.roughness=0.55; m.transparent=false; m.opacity=1; m.depthWrite=true;
-      }
-      // Enable GPU morph targets when present
-      if(o.morphTargetInfluences&&o.morphTargetInfluences.length){
-        m.morphTargets=true; m.morphNormals=true;
-      }
-      m.needsUpdate=true;
-    });
-    if(o.geometry){
-      o.geometry.computeBoundingSphere();
-      o.geometry.computeBoundingBox();
-    }
-    if(o.morphTargetDictionary && ('to_half' in o.morphTargetDictionary || 'bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
-      if(o.geometry) o.geometry.morphTargetsRelative=true;
-    }
-    // Bounce ONLY on Body/Bikini — never hair/head/neck/face
-    const isHairFace=/hair|eyebrow|eyelash|teeth|tongue|high-poly|eye/i.test(o.name||'');
-    if(!isHairFace && o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
-      bodyMeshes.push(o);
-    }
+    mats.forEach(m=>{ if(!m) return;
+      if(/hair|eyebrow|eyelash|high-poly/i.test(m.name||o.name||'')){m.alphaTest=0.5;m.side=THREE.DoubleSide}
+      else {m.alphaTest=0;m.transparent=false;m.opacity=1;m.depthWrite=true}
+      if(/Bikini/i.test(m.name||'')){m.side=THREE.DoubleSide;m.roughness=0.55}
+      m.needsUpdate=true;});
   });
-  const box=new THREE.Box3().setFromObject(gl.scene);
-  gl.scene.position.y-=box.min.y;
   S.add(gl.scene);
-  let n=0; gl.scene.traverse(o=>{if(o.isMesh&&o.visible)n++});
-  W.sp.meshes=n; W.sp.bodyBounceMeshes=bodyMeshes.length; W.sp.bodyMeshes=bodyMeshes;
-  if(gl.animations&&gl.animations.length){
-    mixer=new THREE.AnimationMixer(gl.scene);
-    action=mixer.clipAction(gl.animations[0]);
-    action.loop=THREE.LoopRepeat; action.clampWhenFinished=false;
-    action.timeScale=W.sp.speed; action.play();
-    W.sp.duration=gl.animations[0].duration;
-    W.sp.seek=t=>{action.time=((t%1)+1)%1*W.sp.duration;mixer.update(0);applyBounce()};
-  }
-  if(bodyMeshes[0]) W.sp.morphDict=Object.assign({}, bodyMeshes[0].morphTargetDictionary);
+  let n=0; gl.scene.traverse(o=>{if(o.isMesh&&o.visible)n++}); W.sp.meshes=n;
+  const clip=gl.animations.find(a=>a.name==='squat_bounce')||gl.animations[0];
+  W.sp.clip=clip.name; W.sp.duration=clip.duration;
+  mixer=new THREE.AnimationMixer(gl.scene);
+  BB=boneBounce(mixer,clip,gl.scene); BB.setB(W.sp.breastStr); BB.setG(W.sp.gluteStr); BB.setSpeed(W.sp.speed);
+  W.sp.BB=BB; W.sp.scene=gl.scene;
+  W.sp.seek=t=>{BB.time=((t%1)+1)%1*clip.duration;mixer.update(0)};
   W.sp.ready=true; document.getElementById('msg').textContent='';
 },undefined,e=>{W.sp.errs.push(String(e)); document.getElementById('msg').textContent='Load failed'});
 
 const pp=document.getElementById('pp'), spd=document.getElementById('spd');
-pp.onclick=()=>{W.sp.playing=!W.sp.playing; if(action)action.paused=!W.sp.playing; pp.textContent=W.sp.playing?'⏸ Pause':'▶ Play'};
-spd.oninput=()=>{W.sp.speed=+spd.value; document.getElementById('spdv').textContent=(+spd.value).toFixed(2); if(action)action.timeScale=W.sp.speed};
-document.getElementById('bb').oninput=e=>{W.sp.breastStr=+e.target.value; document.getElementById('bbv').textContent=(+e.target.value).toFixed(2)};
-document.getElementById('bg').oninput=e=>{W.sp.gluteStr=+e.target.value; document.getElementById('bgv').textContent=(+e.target.value).toFixed(2)};
+pp.onclick=()=>{W.sp.playing=!W.sp.playing; if(BB)BB.setPaused(!W.sp.playing); pp.textContent=W.sp.playing?'⏸ Pause':'▶ Play'};
+spd.oninput=()=>{W.sp.speed=+spd.value; document.getElementById('spdv').textContent=(+spd.value).toFixed(2); if(BB)BB.setSpeed(W.sp.speed)};
+document.getElementById('bb').oninput=e=>{W.sp.breastStr=+e.target.value; document.getElementById('bbv').textContent=(+e.target.value).toFixed(2); if(BB)BB.setB(W.sp.breastStr)};
+document.getElementById('bg').oninput=e=>{W.sp.gluteStr=+e.target.value; document.getElementById('bgv').textContent=(+e.target.value).toFixed(2); if(BB)BB.setG(W.sp.gluteStr)};
 document.getElementById('rs').onclick=home;
 addEventListener('resize',()=>{C.aspect=innerWidth/innerHeight; C.updateProjectionMatrix(); R.setSize(innerWidth,innerHeight)});
-
 const clock=new THREE.Clock();
-R.setAnimationLoop(()=>{
-  const dt=Math.min(clock.getDelta(),0.05);
-  if(mixer&&W.sp.playing){
-    mixer.update(dt);
-    if(!W.sp.freezeBounce){
-      const acc=driverAcc();
-      W.sp.bounce.acc=acc;
-      stepSpring(breast, acc, W.sp.breastStr, dt);
-      stepSpring(glute, acc, W.sp.gluteStr, dt);
-    }
-  } else if(mixer && !W.sp.freezeBounce){
-    stepSpring(breast, 0, W.sp.breastStr, dt);
-    stepSpring(glute, 0, W.sp.gluteStr, dt);
-  }
-  applyBounce(); // after mixer so bounce tracks (if zero) don't win
-  O.update(); R.render(S,C);
-});
+R.setAnimationLoop(()=>{const dt=Math.min(clock.getDelta(),0.05); if(mixer&&W.sp.playing)mixer.update(dt); O.update(); R.render(S,C);});
 </script></body></html>
