@@ -29,9 +29,10 @@ let mixer=null,action=null,bodyMeshes=[];
 
 // Jog-v6g-like spring: lag/overshoot vertical motion, damp, sink more than rise
 const SPR={
-  // breast: slightly softer, lower rest (sag), larger travel down
-  b:{freq:3.2, damp:0.30, drive:0.055, sag:0.035, upScale:0.55, downScale:1.35, max:0.22},
-  g:{freq:2.6, damp:0.34, drive:0.028, sag:0.012, upScale:0.60, downScale:1.25, max:0.12},
+  // Tuned so |acc|~20 at 1rep/s yields ~0.10 breast / ~0.05 glute morph (clearly visible)
+  // drive ≈ desired_amp * (2πf)² / typical_acc
+  b:{freq:3.0, damp:0.28, drive:2.2, sag:0.045, upScale:0.50, downScale:1.45, max:0.28},
+  g:{freq:2.5, damp:0.32, drive:0.85, sag:0.018, upScale:0.55, downScale:1.35, max:0.16},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
 const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);
