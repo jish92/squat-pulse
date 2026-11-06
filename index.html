@@ -35,7 +35,7 @@ const SPR={
   g:{freq:2.5, damp:0.32, drive:0.85, sag:0.018, upScale:0.55, downScale:1.35, max:0.16},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
-const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);
+const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);W.sp.springs={breast,glute};
 
 function stepSpring(s, accY, str, dt){
   // accY: world vertical accel of driver (+up). Soft tissue lags → force ∝ -acc
@@ -81,6 +81,7 @@ function applyBounce(){
     if(d.bounce_glute!=null) inf[d.bounce_glute]=gg;
   }
 }
+W.sp.setBounce=(b,g)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;applyBounce()};
 
 const L=new GLTFLoader();L.setMeshoptDecoder(MeshoptDecoder);
 L.load('female_squat_pulse_v4.glb',gl=>{
