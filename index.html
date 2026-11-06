@@ -42,10 +42,10 @@ let mixer=null,action=null,bodyMeshes=[];
 
 // Jog-v6g-style vertical spring: lag/overshoot, damp, sag lower than rise.
 // Morph deltas are mainly -Y (down). Positive influence = breasts drop.
-const BUILD='20261106d';
+const BUILD='20261106k';
 const CHEST_H=0.40; // meters of vertical chest travel in to_half (no skeleton in GLB)
 const SPR={
-  b:{freq:2.2, damp:0.18, drive:28.0, sag:0.35, upScale:0.55, downScale:1.45, max:1.20},
+  b:{freq:2.2, damp:0.18, drive:28.0, sag:0.35, upScale:0.55, downScale:1.15, max:1.05},
   g:{freq:1.9, damp:0.22, drive:16.0, sag:0.25, upScale:0.50, downScale:1.35, max:1.00},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
