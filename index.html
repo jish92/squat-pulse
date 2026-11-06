@@ -30,7 +30,7 @@ const S=new THREE.Scene();S.background=new THREE.Color(0xc9ccd1);
 S.environment=new THREE.PMREMGenerator(R).fromScene(new RoomEnvironment(),0.04).texture;S.environmentIntensity=0.5;
 const C=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,0.05,50);
 const O=new OrbitControls(C,R.domElement);O.enableDamping=true;O.minDistance=0.4;O.maxDistance=8;
-function home(){const ph=innerWidth<innerHeight;C.position.set(ph?0.45:1.25,ph?1.05:1.0,ph?4.6:3.6);O.target.set(0,0.62,0);O.update()}home();
+function home(){const ph=innerWidth<innerHeight;C.position.set(ph?1.15:1.55,ph?1.05:1.0,ph?4.2:3.3);O.target.set(0,0.70,0);O.update()}home();
 S.add(new THREE.HemisphereLight(0xffffff,0x8d8a85,1.7));
 const dl=new THREE.DirectionalLight(0xffffff,1.9);dl.position.set(3,6,4);dl.castShadow=true;dl.shadow.mapSize.set(2048,2048);
 Object.assign(dl.shadow.camera,{left:-2,right:2,top:3,bottom:-1});S.add(dl);
@@ -42,8 +42,8 @@ let mixer=null,action=null,bodyMeshes=[];
 
 // Jog-v6g spring: lag/overshoot, damp, sink more than rise
 const SPR={
-  b:{freq:2.7, damp:0.24, drive:9.0, sag:0.22, upScale:0.55, downScale:1.15, max:0.80},
-  g:{freq:2.2, damp:0.28, drive:5.0, sag:0.15, upScale:0.55, downScale:1.20, max:0.70},
+  b:{freq:2.5, damp:0.22, drive:12.0, sag:0.28, upScale:0.50, downScale:1.25, max:0.95},
+  g:{freq:2.0, damp:0.26, drive:8.0, sag:0.20, upScale:0.50, downScale:1.30, max:0.90},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
 const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);
@@ -75,17 +75,26 @@ function driverAcc(){
   return 2*Math.PI*Math.PI*Math.cos(2*Math.PI*phi)*(spd*spd);
 }
 
-// GPU morph influences only — no CPU position rewriting
+// GPU morph influences only — drive to_half + bounce AFTER mixer (weight tracks stripped from Body/Bikini)
+function pulseHalf(){
+  if(!action) return 0;
+  const dur=action.getClip().duration||1;
+  const phi=((action.time/dur)%1+1)%1;
+  return 0.5-0.5*Math.cos(2*Math.PI*phi); // 0=deep, 1=half
+}
 function applyBounce(){
-  const bb=breast.x, gg=glute.x;
-  W.sp.bounce.b=bb; W.sp.bounce.g=gg;
+  const bb=Math.max(-0.55,Math.min(1.05,breast.x)), gg=Math.max(-0.55,Math.min(1.05,glute.x)), th=pulseHalf();
+  W.sp.bounce.b=bb; W.sp.bounce.g=gg; W.sp.bounce.th=th;
   for(const m of bodyMeshes){
     const d=m.morphTargetDictionary||{};
     const inf=m.morphTargetInfluences;
     if(!inf) continue;
+    // mesh name is "base" for Body node; "Bikini" for bikini
     const isBody=/^base$/i.test(m.name)||/^body$/i.test(m.name);
-    if(d.bounce_breast!=null) inf[d.bounce_breast]=isBody?bb*0.55:bb;
-    if(d.bounce_glute!=null) inf[d.bounce_glute]=isBody?gg*0.85:gg;
+    if(d.to_half!=null) inf[d.to_half]=th;
+    // body underdrive keeps bikini cups covering at peak sag
+    if(d.bounce_breast!=null) inf[d.bounce_breast]=isBody?bb*0.92:bb;
+    if(d.bounce_glute!=null) inf[d.bounce_glute]=isBody?gg*0.95:gg;
   }
 }
 W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;if(freeze)W.sp.freezeBounce=true;applyBounce()};
@@ -118,7 +127,8 @@ L.load('female_squat_pulse_v4.glb',gl=>{
       o.geometry.computeBoundingSphere();
       o.geometry.computeBoundingBox();
     }
-    if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
+    if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary || 'to_half' in o.morphTargetDictionary)){
+      if(o.geometry) o.geometry.morphTargetsRelative=true;
       bodyMeshes.push(o);
     }
   });
