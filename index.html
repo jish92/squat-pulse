@@ -42,8 +42,8 @@ let mixer=null,action=null,bodyMeshes=[];
 
 // Jog-v6g spring: lag/overshoot, damp, sink more than rise
 const SPR={
-  b:{freq:2.5, damp:0.22, drive:12.0, sag:0.28, upScale:0.50, downScale:1.25, max:0.95},
-  g:{freq:2.0, damp:0.26, drive:8.0, sag:0.20, upScale:0.50, downScale:1.30, max:0.90},
+  b:{freq:2.9, damp:0.15, drive:40.0, sag:0.28, upScale:0.80, downScale:1.05, max:1.00},
+  g:{freq:2.1, damp:0.20, drive:18.0, sag:0.22, upScale:0.55, downScale:1.25, max:1.00},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
 const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);
@@ -103,7 +103,7 @@ W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breas
 W.sp.clearFreeze=()=>{W.sp.freezeBounce=false};
 
 const L=new GLTFLoader();
-L.load('female_squat_pulse_v4.glb?v=20261106blender2',gl=>{
+L.load('female_squat_pulse_v4.glb?v=20261106blender3b',gl=>{
   gl.scene.traverse(o=>{
     if(!o.isMesh) return;
     o.castShadow=true;
