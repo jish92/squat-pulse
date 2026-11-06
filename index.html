@@ -75,36 +75,32 @@ function overlayBounce(){
   W.sp.bounce.b=bb; W.sp.bounce.g=gg;
   for(const m of bodyMeshes){
     const d=m.morphTargetDictionary||{};
-    const g=m.geometry;
-    if(!g||!g.attributes||!g.attributes.position) continue;
+    const geo=m.geometry;
+    if(!geo||!geo.attributes||!geo.attributes.position) continue;
+    const pos=geo.attributes.position;
     const inf=m.morphTargetInfluences;
-    // to_half stays on GPU morph; bounce applied on CPU so it is always visible
     if(inf){
       if(d.bounce_breast!=null) inf[d.bounce_breast]=0;
       if(d.bounce_glute!=null) inf[d.bounce_glute]=0;
     }
+    const morphs=geo.morphAttributes&&geo.morphAttributes.position;
+    const mbAttr=morphs&&d.bounce_breast!=null?morphs[d.bounce_breast]:null;
+    const mgAttr=morphs&&d.bounce_glute!=null?morphs[d.bounce_glute]:null;
     if(!m.userData._basePos){
-      m.userData._basePos=Float32Array.from(g.attributes.position.array);
-      const morphs=g.morphAttributes&&g.morphAttributes.position;
-      const decode=attr=>{
-        if(!attr) return null;
-        const n=attr.count, out=new Float32Array(n*3);
-        for(let i=0;i<n;i++){ out[i*3]=attr.getX(i); out[i*3+1]=attr.getY(i); out[i*3+2]=attr.getZ(i); }
-        return out;
-      };
-      m.userData._morphBB=decode(morphs&&d.bounce_breast!=null?morphs[d.bounce_breast]:null);
-      m.userData._morphBG=decode(morphs&&d.bounce_glute!=null?morphs[d.bounce_glute]:null);
+      m.userData._basePos=Float32Array.from(pos.array);
     }
-    const base=m.userData._basePos, mb=m.userData._morphBB, mg=m.userData._morphBG;
-    const arr=g.attributes.position.array;
-    const n=base.length;
-    for(let i=0;i<n;i++){
-      let v=base[i];
-      if(mb) v+=mb[i]*bb;
-      if(mg) v+=mg[i]*gg;
-      arr[i]=v;
+    const base=m.userData._basePos;
+    const nVert=pos.count;
+    const arr=pos.array;
+    // write base + bounce (component-wise; morph get* dequantizes)
+    for(let vi=0; vi<nVert; vi++){
+      const i=vi*3;
+      let x=base[i], y=base[i+1], z=base[i+2];
+      if(mbAttr){ x+=mbAttr.getX(vi)*bb; y+=mbAttr.getY(vi)*bb; z+=mbAttr.getZ(vi)*bb; }
+      if(mgAttr){ x+=mgAttr.getX(vi)*gg; y+=mgAttr.getY(vi)*gg; z+=mgAttr.getZ(vi)*gg; }
+      arr[i]=x; arr[i+1]=y; arr[i+2]=z;
     }
-    g.attributes.position.needsUpdate=true;
+    pos.needsUpdate=true;
   }
 }
 function applyBounce(){ overlayBounce(); }
