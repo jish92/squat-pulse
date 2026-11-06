@@ -24,7 +24,7 @@ function home(){const ph=innerWidth<innerHeight;C.position.set(ph?0.45:1.25,ph?1
 S.add(new THREE.HemisphereLight(0xffffff,0x8d8a85,1.7));const dl=new THREE.DirectionalLight(0xffffff,1.9);dl.position.set(3,6,4);dl.castShadow=true;dl.shadow.mapSize.set(2048,2048);Object.assign(dl.shadow.camera,{left:-2,right:2,top:3,bottom:-1});S.add(dl);
 const g=new THREE.Mesh(new THREE.CircleGeometry(8,64),new THREE.MeshStandardMaterial({color:0xb8bbbf,roughness:1}));g.rotation.x=-Math.PI/2;g.receiveShadow=true;S.add(g);
 
-const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,freezeBounce:false,errs:[],bounce:{b:0,g:0,acc:0}};
+const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,freezeBounce:false,errs:[],bounce:{b:0,g:0,th:0,acc:0}};
 let mixer=null,action=null,bodyMeshes=[];
 
 // Jog-v6g-like spring: lag/overshoot vertical motion, damp, sink more than rise
@@ -70,34 +70,41 @@ function driverAcc(){
   return 2*Math.PI*Math.PI*Math.cos(2*Math.PI*phi)*(spd*spd);
 }
 
+function morphWeightToHalf(){
+  if(!action) return 0;
+  const dur=action.getClip().duration||1;
+  const phi=((action.time/dur)%1+1)%1;
+  return 0.5-0.5*Math.cos(2*Math.PI*phi);
+}
 function overlayBounce(){
   const bb=breast.x, gg=glute.x;
-  W.sp.bounce.b=bb; W.sp.bounce.g=gg;
+  const th=morphWeightToHalf();
+  W.sp.bounce.b=bb; W.sp.bounce.g=gg; W.sp.bounce.th=th;
   for(const m of bodyMeshes){
     const d=m.morphTargetDictionary||{};
     const geo=m.geometry;
     if(!geo||!geo.attributes||!geo.attributes.position) continue;
     const pos=geo.attributes.position;
-    const inf=m.morphTargetInfluences;
-    if(inf){
-      if(d.bounce_breast!=null) inf[d.bounce_breast]=0;
-      if(d.bounce_glute!=null) inf[d.bounce_glute]=0;
-    }
     const morphs=geo.morphAttributes&&geo.morphAttributes.position;
-    const mbAttr=morphs&&d.bounce_breast!=null?morphs[d.bounce_breast]:null;
-    const mgAttr=morphs&&d.bounce_glute!=null?morphs[d.bounce_glute]:null;
+    if(!morphs) continue;
+    // Keep GPU influences at 0 (CPU owns deformation)
+    if(m.morphTargetInfluences) m.morphTargetInfluences.fill(0);
     if(!m.userData._basePos){
       m.userData._basePos=Float32Array.from(pos.array);
+      m.userData._mTH=d.to_half!=null?morphs[d.to_half]:null;
+      m.userData._mBB=d.bounce_breast!=null?morphs[d.bounce_breast]:null;
+      m.userData._mBG=d.bounce_glute!=null?morphs[d.bounce_glute]:null;
     }
     const base=m.userData._basePos;
-    const nVert=pos.count;
+    const mTH=m.userData._mTH, mBB=m.userData._mBB, mBG=m.userData._mBG;
     const arr=pos.array;
-    // write base + bounce (component-wise; morph get* dequantizes)
+    const nVert=pos.count;
     for(let vi=0; vi<nVert; vi++){
       const i=vi*3;
       let x=base[i], y=base[i+1], z=base[i+2];
-      if(mbAttr){ x+=mbAttr.getX(vi)*bb; y+=mbAttr.getY(vi)*bb; z+=mbAttr.getZ(vi)*bb; }
-      if(mgAttr){ x+=mgAttr.getX(vi)*gg; y+=mgAttr.getY(vi)*gg; z+=mgAttr.getZ(vi)*gg; }
+      if(mTH){ x+=mTH.getX(vi)*th; y+=mTH.getY(vi)*th; z+=mTH.getZ(vi)*th; }
+      if(mBB){ x+=mBB.getX(vi)*bb; y+=mBB.getY(vi)*bb; z+=mBB.getZ(vi)*bb; }
+      if(mBG){ x+=mBG.getX(vi)*gg; y+=mBG.getY(vi)*gg; z+=mBG.getZ(vi)*gg; }
       arr[i]=x; arr[i+1]=y; arr[i+2]=z;
     }
     pos.needsUpdate=true;
@@ -111,10 +118,12 @@ W.sp.readInfluences=()=>bodyMeshes.map(m=>({name:m.name, dict:m.morphTargetDicti
 const L=new GLTFLoader();L.setMeshoptDecoder(MeshoptDecoder);
 L.load('female_squat_pulse_v4.glb',gl=>{
   gl.scene.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{if(!m)return;if(/hair|eyebrow|eyelash|high-poly/i.test(m.name||o.name||'')){m.alphaTest=0.5;m.side=THREE.DoubleSide}else{m.alphaTest=0;m.transparent=false;m.opacity=1;m.depthWrite=true}if(/Bikini/i.test(m.name||o.name||'')){m.side=THREE.DoubleSide;m.roughness=0.55;m.transparent=false;m.opacity=1;m.depthWrite=true}m.needsUpdate=true});
-    if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary || 'to_half' in o.morphTargetDictionary)){
+    if(o.morphTargetDictionary && ('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary)){
+      // CPU morph path: disable GPU morphTargets so position writes are visible
       const mats=Array.isArray(o.material)?o.material:[o.material];
-      mats.forEach(m=>{ if(!m)return; m.morphTargets=true; m.morphNormals=true; m.needsUpdate=true; });
-      if('bounce_breast' in o.morphTargetDictionary || 'bounce_glute' in o.morphTargetDictionary) bodyMeshes.push(o);
+      mats.forEach(m=>{ if(!m)return; m.morphTargets=false; m.morphNormals=false; m.needsUpdate=true; });
+      if(o.morphTargetInfluences) o.morphTargetInfluences.fill(0);
+      bodyMeshes.push(o);
     }
   }});
   const b=new THREE.Box3().setFromObject(gl.scene);gl.scene.position.y-=b.min.y;S.add(gl.scene);
