@@ -24,15 +24,15 @@ function home(){const ph=innerWidth<innerHeight;C.position.set(ph?0.45:1.25,ph?1
 S.add(new THREE.HemisphereLight(0xffffff,0x8d8a85,1.7));const dl=new THREE.DirectionalLight(0xffffff,1.9);dl.position.set(3,6,4);dl.castShadow=true;dl.shadow.mapSize.set(2048,2048);Object.assign(dl.shadow.camera,{left:-2,right:2,top:3,bottom:-1});S.add(dl);
 const g=new THREE.Mesh(new THREE.CircleGeometry(8,64),new THREE.MeshStandardMaterial({color:0xb8bbbf,roughness:1}));g.rotation.x=-Math.PI/2;g.receiveShadow=true;S.add(g);
 
-const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,errs:[],bounce:{b:0,g:0,acc:0}};
+const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,freezeBounce:false,errs:[],bounce:{b:0,g:0,acc:0}};
 let mixer=null,action=null,bodyMeshes=[];
 
 // Jog-v6g-like spring: lag/overshoot vertical motion, damp, sink more than rise
 const SPR={
   // Tuned so |acc|~20 at 1rep/s yields ~0.10 breast / ~0.05 glute morph (clearly visible)
   // drive ≈ desired_amp * (2πf)² / typical_acc
-  b:{freq:3.0, damp:0.28, drive:2.2, sag:0.045, upScale:0.50, downScale:1.45, max:0.28},
-  g:{freq:2.5, damp:0.32, drive:0.85, sag:0.018, upScale:0.55, downScale:1.35, max:0.16},
+  b:{freq:3.0, damp:0.26, drive:2.4, sag:0.05, upScale:0.55, downScale:1.55, max:0.22},
+  g:{freq:2.4, damp:0.30, drive:1.05, sag:0.022, upScale:0.55, downScale:1.45, max:0.14},
 };
 function makeSpring(p){return {x:p.sag, v:0, p}}
 const breast=makeSpring(SPR.b), glute=makeSpring(SPR.g);W.sp.springs={breast,glute};
@@ -81,7 +81,7 @@ function applyBounce(){
     if(d.bounce_glute!=null) inf[d.bounce_glute]=gg;
   }
 }
-W.sp.setBounce=(b,g)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;applyBounce()};
+W.sp.setBounce=(b,g,freeze)=>{if(b!=null)breast.x=+b;if(g!=null)glute.x=+g;breast.v=0;glute.v=0;if(freeze)W.sp.freezeBounce=true;applyBounce()};W.sp.clearFreeze=()=>{W.sp.freezeBounce=false};
 
 const L=new GLTFLoader();L.setMeshoptDecoder(MeshoptDecoder);
 L.load('female_squat_pulse_v4.glb',gl=>{
@@ -118,11 +118,13 @@ R.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(),0.05);
   if(mixer&&W.sp.playing){
     mixer.update(dt);
-    const acc=driverAcc();
-    W.sp.bounce.acc=acc;
-    stepSpring(breast, acc, W.sp.breastStr, dt);
-    stepSpring(glute, acc, W.sp.gluteStr, dt);
-  } else if(mixer){
+    if(!W.sp.freezeBounce){
+      const acc=driverAcc();
+      W.sp.bounce.acc=acc;
+      stepSpring(breast, acc, W.sp.breastStr, dt);
+      stepSpring(glute, acc, W.sp.gluteStr, dt);
+    }
+  } else if(mixer && !W.sp.freezeBounce){
     // still settle springs gently when paused
     stepSpring(breast, 0, W.sp.breastStr, dt);
     stepSpring(glute, 0, W.sp.gluteStr, dt);
