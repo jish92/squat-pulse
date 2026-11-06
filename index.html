@@ -1,5 +1,5 @@
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>Squat pulse v5b</title>
+<title>Squat pulse v5c</title>
 <style>html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#c9ccd1}canvas{display:block;touch-action:none}
 #ui{position:fixed;left:8px;bottom:8px;background:rgba(255,255,255,.92);border-radius:10px;padding:8px 10px;font-size:14px;max-width:calc(100vw - 36px);box-shadow:0 1px 6px rgba(0,0,0,.15)}
 #ui button{font-size:16px;padding:8px 14px;border-radius:8px;border:1px solid #999;background:#fff;margin-right:6px}
@@ -55,10 +55,10 @@ function boneBounce(mixer,clip,root){
     get time(){return A.main.time}, set time(t){all.forEach(a=>a.time=t)}};
 }
 
-const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,errs:[],model:'v5b'};
+const W=window;W.sp={ready:false,playing:true,speed:1,breastStr:1,gluteStr:1,errs:[],model:'v5c'};
 let mixer=null,BB=null;
 const L=new GLTFLoader();
-L.load('female_squat_pulse_v5b.glb?v=20261106v5b',gl=>{
+L.load('female_squat_pulse_v5c.glb?v=20261106v5c',gl=>{
   gl.scene.traverse(o=>{
     if(!o.isMesh) return;
     o.castShadow=true; o.frustumCulled=false;
